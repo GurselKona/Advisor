@@ -2,3 +2,5 @@
 __pycache__/
 *.pyc
 trade_report_*.txt
+model.joblib
+model_meta.json

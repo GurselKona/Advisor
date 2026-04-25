@@ -16,6 +16,26 @@ from abc import ABC, abstractmethod
 import pandas as pd
 
 
+# ── Yardımcı: kapalı gün temizliği ───────────────────────────────────────────
+
+def _drop_closed_days(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Piyasanın kapalı olduğu günlere ait satırları çıkarır.
+    Kriter: Volume == 0 VEYA (High == Low == Open == Close) olan satırlar.
+    7/24 açık piyasalarda (kripto/forex) Volume hiç 0 olmaz, bu fonksiyon etkisizdir.
+    """
+    mask = pd.Series(True, index=df.index)
+
+    if "Volume" in df.columns:
+        mask &= df["Volume"] > 0
+
+    if {"Open", "High", "Low", "Close"}.issubset(df.columns):
+        flat = (df["High"] == df["Low"]) & (df["Open"] == df["Close"]) & (df["High"] == df["Open"])
+        mask &= ~flat
+
+    return df[mask]
+
+
 # ── Yardımcı: interval tespiti ────────────────────────────────────────────────
 
 def _infer_interval(df: pd.DataFrame) -> str | None:
@@ -120,7 +140,7 @@ class YahooFinanceProvider(DataProvider):
                 agg["Volume"] = "sum"
             df = df.resample(self._RESAMPLE[interval]).agg(agg).dropna()
 
-        return df.round(4)
+        return _drop_closed_days(df).round(4)
 
     def search(self, query: str) -> list[tuple[str, str]]:
         if not query:
@@ -181,7 +201,7 @@ class CsvFileProvider(DataProvider):
         keep = [c for c in ("Open", "High", "Low", "Close", "Volume") if c in df.columns]
         if not keep:
             raise ValueError("CSV'de Open/High/Low/Close sütunları bulunamadı.")
-        return df[keep].round(4)
+        return _drop_closed_days(df[keep]).round(4)
 
     def search(self, query: str) -> list[tuple[str, str]]:
         """Varsayılan dizindeki CSV dosyalarını listeler; query ile ada göre filtreler."""

@@ -12,8 +12,15 @@ import streamlit as st
 from streamlit_searchbox import st_searchbox
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from candlestick_analyzer import analyze, Signal, Strength
+import candlestick_analyzer
+import ml_analyzer
+from candlestick_analyzer import Signal, Strength
 from data_providers import REGISTRY, DataProvider
+
+ENGINES = {
+    "Kural Tabanlı": candlestick_analyzer,
+    "Makine Öğrenmesi": ml_analyzer,
+}
 
 # ── Sabitler ──────────────────────────────────────────────────────────────────
 
@@ -23,9 +30,25 @@ INTERVALS = [
     ("2h",  "2 Saat"),   ("4h",  "4 Saat"),
     ("1d",  "1 Gün"),    ("1wk", "1 Hafta"),   ("1mo", "1 Ay"),
 ]
-PRESETS_INTRADAY = [("Son 1 gün", 1), ("Son 3 gün", 3), ("Son 7 gün", 7), ("Son 30 gün", 30)]
-PRESETS_DAILY    = [("Son 1 ay", 30), ("Son 3 ay", 90), ("Son 6 ay", 180),
-                    ("Son 1 yıl", 365), ("Son 5 yıl", 1825)]
+# Tüm aday presetler — her interval kendi limitine göre filtrelenir
+_ALL_PRESETS = [
+    (1,    "Son 1 gün"),
+    (3,    "Son 3 gün"),
+    (7,    "Son 7 gün"),
+    (30,   "Son 1 ay"),
+    (90,   "Son 3 ay"),
+    (180,  "Son 6 ay"),
+    (365,  "Son 1 yıl"),
+    (730,  "Son 2 yıl"),
+    (1095, "Son 3 yıl"),
+    (1460, "Son 4 yıl"),
+    (1825, "Son 5 yıl"),
+]
+
+def build_presets(max_days: int | None) -> list[tuple[str, int]]:
+    """max_days limitine sığan presetleri döndürür. None → limitsiz (günlük+)."""
+    limit = max_days if max_days is not None else 9999
+    return [(label, days) for days, label in _ALL_PRESETS if days <= limit]
 
 SIG_ICON  = {"BUY": "🟢", "SELL": "🔴", "NEUTRAL": "🟡"}
 SIG_COLOR = {"BUY": "#1a7f4b", "SELL": "#b91c1c", "NEUTRAL": "#92400e"}
@@ -53,14 +76,20 @@ def make_candle_chart(df: pd.DataFrame, ticker: str, interval: str, rec) -> go.F
     )
 
     # Candlestick
-    has_time = (
-        isinstance(df.index, pd.DatetimeIndex)
-        and ((df.index.hour != 0).any() or (df.index.minute != 0).any())
-    )
+    is_dt = isinstance(df.index, pd.DatetimeIndex)
+    has_time = is_dt and ((df.index.hour != 0).any() or (df.index.minute != 0).any())
+    has_weekend = is_dt and df.index[:min(60, len(df))].dayofweek.isin([5, 6]).any()
     hover_fmt = "%Y-%m-%d %H:%M" if has_time else "%Y-%m-%d"
+
+    # x değerlerini Python datetime listesine çevir — Plotly 6.x için en güvenli format
+    if is_dt:
+        x_vals = df.index.to_pydatetime().tolist()
+    else:
+        x_vals = df.index.tolist()
+
     fig.add_trace(
         go.Candlestick(
-            x=df.index,
+            x=x_vals,
             open=df["Open"], high=df["High"],
             low=df["Low"],   close=df["Close"],
             name=ticker,
@@ -87,7 +116,7 @@ def make_candle_chart(df: pd.DataFrame, ticker: str, interval: str, rec) -> go.F
     ]:
         fig.add_trace(
             go.Scatter(
-                x=df.index, y=series,
+                x=x_vals, y=series.tolist(),
                 name=f"EMA{period}",
                 line=dict(width=1.2, color=color),
                 hovertemplate=f"EMA{period}: %{{y:.4f}}<extra></extra>",
@@ -118,7 +147,7 @@ def make_candle_chart(df: pd.DataFrame, ticker: str, interval: str, rec) -> go.F
         ]
         fig.add_trace(
             go.Bar(
-                x=df.index, y=df["Volume"],
+                x=x_vals, y=df["Volume"].tolist(),
                 name="Hacim",
                 marker_color=bar_colors,
                 opacity=0.55,
@@ -152,7 +181,14 @@ def make_candle_chart(df: pd.DataFrame, ticker: str, interval: str, rec) -> go.F
         ),
         margin=dict(l=10, r=120, t=55, b=10),
     )
-    fig.update_xaxes(**spike_style, gridcolor="#1f2937", zeroline=False, showline=False)
+
+    # Hafta sonu boşluklarını gizle — sadece Mon-Fri piyasalar için
+    rangebreaks = []
+    if not has_weekend:
+        rangebreaks.append(dict(bounds=["sat", "mon"]))
+
+    fig.update_xaxes(**spike_style, gridcolor="#1f2937", zeroline=False, showline=False,
+                     rangebreaks=rangebreaks)
     fig.update_yaxes(
         **spike_style, gridcolor="#1f2937", zeroline=False,
         showline=False, side="right",
@@ -231,15 +267,23 @@ def main():
     # ── Parametreler ──────────────────────────────────────────────────────────
     st.subheader("⚙️ Parametreler")
 
-    # Veri kaynağı seçimi
-    src_col, _, _ = st.columns([1.5, 2, 2])
+    # Veri kaynağı ve motor seçimi
+    src_col, eng_col, _ = st.columns([1.5, 1.5, 1])
     with src_col:
         provider_name = st.selectbox(
             "Veri Kaynağı",
             list(REGISTRY.keys()),
             help="\n".join(f"**{n}**: {p.description}" for n, p in REGISTRY.items()),
         )
+    with eng_col:
+        engine_name = st.selectbox(
+            "Analiz Motoru",
+            list(ENGINES.keys()),
+            help="**Kural Tabanlı**: EMA/RSI/WaveTrend + mum formasyonları\n"
+                 "**Makine Öğrenmesi**: RandomForest — en az 120 bar gerekli",
+        )
     provider: DataProvider = REGISTRY[provider_name]
+    engine = ENGINES[engine_name]
 
     # Ticker / dosya girişleri
     ticker_cols = st.columns(5)
@@ -267,7 +311,7 @@ def main():
 
     max_days = provider.max_days_for_interval(interval)
     is_intraday = max_days is not None
-    presets = PRESETS_INTRADAY if is_intraday else PRESETS_DAILY
+    presets = build_presets(max_days)
 
     with row2[1]:
         preset_names = [p[0] for p in presets] + ["Özel tarih"]
@@ -297,7 +341,7 @@ def main():
         analyze_clicked = st.button(
             "🔍 Analiz Et", type="primary",
             disabled=(len(tickers) == 0),
-            use_container_width=True,
+            width="stretch",
         )
 
     st.divider()
@@ -316,7 +360,7 @@ def main():
                 if df.empty:
                     errors[ticker] = "Veri bulunamadı — ticker doğru mu, dönem yeterince kısa mu?"
                     continue
-                rec = analyze(df)
+                rec = engine.analyze(df)
                 effective_iv = provider.detect_interval(df) or interval
                 results[ticker] = {"df": df, "rec": rec, "interval": effective_iv}
             except Exception as exc:
@@ -347,6 +391,7 @@ def main():
                 results=results, all_text=all_text,
                 fname=fname, fpath=fpath,
                 interval=interval, start_str=start_str, end_str=end_str,
+                engine_name=engine_name,
             )
 
     # ── Sonuçları göster ──────────────────────────────────────────────────────
@@ -385,7 +430,7 @@ def main():
             "RSI":         f"{ind.rsi:.1f}" if ind else "—",
             "EMA Hizalama": ind.ema_alignment if ind else "—",
         })
-    st.dataframe(pd.DataFrame(summary_rows).set_index("Ticker"), use_container_width=True)
+    st.dataframe(pd.DataFrame(summary_rows).set_index("Ticker"), width="stretch")
 
     # Ticker tabları
     st.subheader("Detaylı Analiz")
@@ -449,27 +494,53 @@ def main():
                         st.metric(name, f"{val:.4f}", delta=f"{diff_pct:+.2f}%")
                     st.caption(f"Hizalama: **{ind.ema_alignment}**")
 
-            # Mum formasyonları
-            st.markdown("##### Mum Formasyonları")
-            if rec.patterns:
-                for sig_val, label in [("BUY", "Al"), ("SELL", "Sat"), ("NEUTRAL", "Nötr")]:
-                    grp = [p for p in rec.patterns if p.signal.value == sig_val]
-                    if grp:
-                        st.markdown(f"**{SIG_ICON[sig_val]} {label} sinyalli formasyonlar:**")
-                        for p in grp:
-                            bar_label = "son mum" if p.bars_ago == 0 else f"{p.bars_ago} mum önce"
-                            st.markdown(
-                                f"&nbsp;&nbsp;**{p.name}** ({p.strength.value})"
-                                f" · `{bar_label}` — {p.description}"
-                            )
+            # Mum formasyonları (kural tabanlı) / ML bilgileri
+            active_engine = st.session_state.get("engine_name", "Kural Tabanlı")
+            if active_engine == "Makine Öğrenmesi":
+                st.markdown("##### Model Bilgisi")
+                fi  = getattr(rec, "_feature_importances", [])
+                tb  = getattr(rec, "_training_bars", "?")
+                ld  = getattr(rec, "_label_dist", {})
+                src = getattr(rec, "_model_source", "onthefly")
+
+                src_badge = (
+                    "🟢 **Pre-trained model**" if src == "pretrained"
+                    else "🟡 **Anlık eğitim** (pre-trained model bulunamadı)"
+                )
+                st.markdown(src_badge)
+
+                tb_str = f"{tb:,}" if isinstance(tb, int) else str(tb)
+                st.caption(
+                    f"Eğitim: **{tb_str} bar**  |  "
+                    f"BUY: {ld.get('BUY',0):,}  "
+                    f"SELL: {ld.get('SELL',0):,}  "
+                    f"NEUTRAL: {ld.get('NEUTRAL',0):,}"
+                )
+                if fi:
+                    st.markdown("**En etkili özellikler:**")
+                    for feat, imp in fi:
+                        st.markdown(f"&nbsp;&nbsp;`{feat}` — {imp:.1%}")
             else:
-                st.info("Analiz penceresinde mum formasyonu tespit edilmedi.")
+                st.markdown("##### Mum Formasyonları")
+                if rec.patterns:
+                    for sig_val, label in [("BUY", "Al"), ("SELL", "Sat"), ("NEUTRAL", "Nötr")]:
+                        grp = [p for p in rec.patterns if p.signal.value == sig_val]
+                        if grp:
+                            st.markdown(f"**{SIG_ICON[sig_val]} {label} sinyalli formasyonlar:**")
+                            for p in grp:
+                                bar_label = "son mum" if p.bars_ago == 0 else f"{p.bars_ago} mum önce"
+                                st.markdown(
+                                    f"&nbsp;&nbsp;**{p.name}** ({p.strength.value})"
+                                    f" · `{bar_label}` — {p.description}"
+                                )
+                else:
+                    st.info("Analiz penceresinde mum formasyonu tespit edilmedi.")
 
             # Grafik
             st.markdown("##### Grafik")
             st.plotly_chart(
                 make_candle_chart(df, ticker, effective_iv, rec),
-                use_container_width=True,
+                width="stretch",
                 config={"scrollZoom": True, "displaylogo": False,
                         "modeBarButtonsToRemove": ["select2d", "lasso2d"]},
             )
@@ -483,7 +554,7 @@ def main():
             data=all_text.encode("utf-8"),
             file_name=fname,
             mime="text/plain",
-            use_container_width=True,
+            width="stretch",
         )
     with raw_col:
         with st.expander("📋 Ham Rapor Metni"):
