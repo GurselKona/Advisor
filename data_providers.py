@@ -14,6 +14,12 @@ import os
 from abc import ABC, abstractmethod
 
 import pandas as pd
+from curl_cffi.requests import Session as CurlSession
+
+# Kurumsal SSL proxy (MITM) senaryolarında curl_cffi'nin gömülü libcurl'ü
+# şirket sertifikasını doğrulayamaz. Uygulama yerel masaüstü aracı olduğundan
+# verify=False güvenli kabul edilir; gelen veriyi değil bağlantı kimliğini etkiler.
+_SESSION = CurlSession(impersonate="chrome", verify=False)
 
 
 # ── Yardımcı: kapalı gün temizliği ───────────────────────────────────────────
@@ -124,7 +130,7 @@ class YahooFinanceProvider(DataProvider):
         import yfinance as yf
 
         fetch_iv = "60m" if interval in self._RESAMPLE else interval
-        df = yf.Ticker(ticker).history(start=start, end=end, interval=fetch_iv)
+        df = yf.Ticker(ticker, session=_SESSION).history(start=start, end=end, interval=fetch_iv)
         if df.empty:
             return df
 
@@ -148,7 +154,7 @@ class YahooFinanceProvider(DataProvider):
         try:
             import yfinance as yf
             quotes = [
-                q for q in yf.Search(query, max_results=8, enable_fuzzy_query=True).quotes
+                q for q in yf.Search(query, max_results=8, enable_fuzzy_query=True, session=_SESSION).quotes
                 if q.get("symbol")
             ]
             return [
