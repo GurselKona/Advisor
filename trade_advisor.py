@@ -16,6 +16,7 @@ import candlestick_analyzer
 import ml_analyzer
 from candlestick_analyzer import Signal, Strength
 from data_providers import REGISTRY, DataProvider
+from hmm_regime import detect_regime, apply_regime_filter, REGIME_ICON
 
 ENGINES = {
     "Kural Tabanlı": candlestick_analyzer,
@@ -361,8 +362,11 @@ def main():
                     errors[ticker] = "Veri bulunamadı — ticker doğru mu, dönem yeterince kısa mu?"
                     continue
                 rec = engine.analyze(df)
+                regime = detect_regime(df)
+                if regime is not None:
+                    apply_regime_filter(rec, regime)
                 effective_iv = provider.detect_interval(df) or interval
-                results[ticker] = {"df": df, "rec": rec, "interval": effective_iv}
+                results[ticker] = {"df": df, "rec": rec, "interval": effective_iv, "regime": regime}
             except Exception as exc:
                 errors[ticker] = str(exc)
 
@@ -417,18 +421,19 @@ def main():
     st.subheader("Özet")
     summary_rows = []
     for ticker, data in results.items():
-        rec = data["rec"]
-        ind = rec.indicators
+        rec    = data["rec"]
+        ind    = rec.indicators
+        regime = data.get("regime")
+        regime_str = (
+            f"{REGIME_ICON[regime.label]} {regime.label}" if regime else "—"
+        )
         summary_rows.append({
-            "Ticker":      ticker,
-            "Sinyal":      f"{SIG_ICON[rec.signal.value]} {rec.signal.value}",
-            "Güç":         f"{STR_STARS[rec.strength.value]} {rec.strength.value}",
-            "Güven":       f"{rec.confidence:.0%}",
-            "Giriş":       f"{rec.entry_price:.4f}" if rec.entry_price else "—",
-            "Stop Loss":   f"{rec.stop_loss:.4f}" if rec.stop_loss else "—",
-            "Take Profit": f"{rec.take_profit:.4f}" if rec.take_profit else "—",
-            "RSI":         f"{ind.rsi:.1f}" if ind else "—",
-            "EMA Hizalama": ind.ema_alignment if ind else "—",
+            "Ticker":  ticker,
+            "Sinyal":  f"{SIG_ICON[rec.signal.value]} {rec.signal.value}",
+            "Güç":     f"{STR_STARS[rec.strength.value]} {rec.strength.value}",
+            "Güven":   f"{rec.confidence:.0%}",
+            "Rejim":   regime_str,
+            "Giriş":   f"{rec.entry_price:.4f}" if rec.entry_price else "—",
         })
     st.dataframe(pd.DataFrame(summary_rows).set_index("Ticker"), width="stretch")
 
@@ -447,14 +452,24 @@ def main():
         effective_iv = data["interval"]
 
         with tab:
+            regime = data.get("regime")
             # Sinyal banner
             bg = SIG_BG[rec.signal.value]
             fg = SIG_COLOR[rec.signal.value]
+            regime_part = (
+                f"&nbsp;&nbsp;|&nbsp;&nbsp;Rejim: {REGIME_ICON[regime.label]} {regime.label}"
+                if regime else ""
+            )
+            filter_note = (
+                "&nbsp;&nbsp;|&nbsp;&nbsp;⚠️ Rejim filtresi uygulandı"
+                if regime and regime.filtered else ""
+            )
             st.markdown(
                 f'<div class="banner" style="background:{bg};color:{fg};border-color:{fg};">'
                 f'{SIG_ICON[rec.signal.value]}&nbsp; {ticker} — {rec.signal.value}'
                 f'&nbsp;&nbsp;|&nbsp;&nbsp;{rec.strength.value}'
                 f'&nbsp;&nbsp;|&nbsp;&nbsp;Güven: {rec.confidence:.0%}'
+                f'{regime_part}{filter_note}'
                 f'</div>',
                 unsafe_allow_html=True,
             )

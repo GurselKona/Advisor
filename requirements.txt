@@ -7,3 +7,4 @@ plotly==6.7.0
 scikit-learn==1.8.0
 joblib==1.5.3
 tqdm==4.67.1
+hmmlearn==0.3.3
