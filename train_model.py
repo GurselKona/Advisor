@@ -37,7 +37,7 @@ TICKERS = [
     "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "META", "NVDA",
     "JPM", "JNJ", "V", "UNH", "XOM", "WMT", "PG", "HD",
     # ETF
-    "SPY", "QQQ", "IWM", "GLD", "TLT", "XLF", "XLE",
+    "SPY", "QQQ", "IWM", "GLD", "TLT", "XLF", "XLE","SIL",
     # Volatil / teknoloji
     "NFLX", "AMD", "INTC", "CRM", "BABA",
     # Kripto

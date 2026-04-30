@@ -116,7 +116,7 @@ class YahooFinanceProvider(DataProvider):
     name = "Yahoo Finance"
     description = "Hisse, ETF, kripto, döviz, endeks"
     ticker_label = "Ticker"
-    ticker_placeholder = "AAPL, TSLA, BTC-USD, EURUSD=X…"
+    ticker_placeholder = "AAPL, TSLA, BTC-USD, EURUSD=X, GC=F (Altın), SI=F (Gümüş)…"
 
     _INTRADAY_LIMITS: dict[str, int] = {
         "1m": 7, "2m": 60, "5m": 60,
